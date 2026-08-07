@@ -313,6 +313,11 @@ class Translation(Transform):
         )
 
     def transform_point(self, point: typing.Sequence[float]) -> tuple[float, ...]:
+        if len(point) != len(self.translation):
+            raise ValueError(
+                f"Length of point ({len(point)}) does not match "
+                f"length of translation vector ({len(self.translation)})"
+            )
         return tuple(p + t for p, t in zip(point, self.translation, strict=True))
 
     def as_affine(self) -> Affine:
@@ -735,6 +740,17 @@ class ByDimensionTransform(BaseAttrs):
     input_axes: tuple[int, ...] = Field(..., description="Input axes indices.")
     output_axes: tuple[int, ...] = Field(..., description="Output axes indices.")
 
+    @property
+    def has_inverse(self) -> bool:
+        return self.transformation.has_inverse
+
+    def get_inverse(self) -> ByDimensionTransform:
+        return ByDimensionTransform(
+            transformation=self.transformation.get_inverse(),
+            input_axes=self.output_axes,
+            output_axes=self.input_axes,
+        )
+
 
 class ByDimension(Transform):
     """
@@ -748,21 +764,110 @@ class ByDimension(Transform):
 
     @property
     def has_inverse(self) -> bool:
-        return False
+        return all(t.has_inverse for t in self.transformations)
 
     def get_inverse(self) -> ByDimension:
+        if not self.has_inverse:
+            raise RuntimeError("Not all transformations have an inverse")
+        return ByDimension(
+            transformations=tuple(t.get_inverse() for t in self.transformations)
+        )
+
+    def transform_point(self, point: typing.Sequence[float]) -> tuple[float, ...]:
+        point_in = list(point)
+        point_out = point_in.copy()
+        for t in self.transformations:
+            coord_in = tuple(point_in[i] for i in t.input_axes)
+            coord_out = t.transformation.transform_point(coord_in)
+            for coord, i in zip(coord_out, t.output_axes, strict=True):
+                point_out[i] = coord
+
+        return tuple(point_out)
+
+    def as_affine(self) -> Affine:
+        # TODO: if all the transforms have affines, it should be possible to
+        #  implement this
+        raise NoAffineError
+
+
+class ProjectAxis(Transform):
+    """
+    ProjectAxis transformation projects coordinates between different dimensionalities.
+
+    Projects input coordinates from N dimensions to M dimensions by adding or
+    dropping dimensions at specified indices of the coordinate vector.
+    """
+
+    type: Literal["projectAxis"] = "projectAxis"
+    createdOutputs: tuple[int, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=3,
+        description="Positions at which to insert zeros in coordinate vector",
+    )
+    droppedInputs: tuple[int, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=3,
+        description="Array of positions at which to drop dimensions.",
+    )
+
+    @field_validator("createdOutputs", mode="after")
+    @classmethod
+    def _created_outputs_unique(
+        cls, createdOutputs: tuple[int, ...] | None
+    ) -> tuple[int, ...] | None:
+        """
+        Ensures that the positions in createdOutputs are unique.
+        """
+        if createdOutputs is not None:
+            unique_items_validator(list(createdOutputs))
+        return createdOutputs
+
+    @field_validator("droppedInputs", mode="after")
+    @classmethod
+    def _dropped_inputs_unique(
+        cls, droppedInputs: tuple[int, ...] | None
+    ) -> tuple[int, ...] | None:
+        """
+        Ensures that the positions in droppedInputs are unique.
+        """
+        if droppedInputs is not None:
+            unique_items_validator(list(droppedInputs))
+        return droppedInputs
+
+    @model_validator(mode="after")
+    def _ensure_either_created_or_dropped(self: Self) -> Self:
+        """
+        Ensures that at least one of createdOutputs or droppedInputs is given.
+        """
+        if self.createdOutputs is None and self.droppedInputs is None:
+            raise ValueError(
+                "At least one of 'createdOutputs' or 'droppedInputs' must be set."
+            )
+        return self
+
+    @property
+    def has_inverse(self) -> bool:
+        raise NotImplementedError
+
+    def get_inverse(self) -> ProjectAxis:
         raise NotImplementedError
 
     def transform_point(self, point: typing.Sequence[float]) -> tuple[float, ...]:
         raise NotImplementedError
 
     def as_affine(self) -> Affine:
-        raise NoAffineError
+        raise NoAffineError(
+            "ProjectAxis transformation cannot be converted to affine: "
+            "it changes dimensionality."
+        )
 
 
 AnyTransform = Annotated[
     Identity
     | MapAxis
+    | ProjectAxis
     | Translation
     | Scale
     | Affine
@@ -774,6 +879,3 @@ AnyTransform = Annotated[
     | ByDimension,
     Field(discriminator="type"),
 ]
-
-# Rebuild models to resolve forward references
-ByDimensionTransform.model_rebuild()

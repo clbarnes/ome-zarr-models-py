@@ -6,10 +6,13 @@ from pydantic import ValidationError
 from ome_zarr_models.v06.coordinate_transforms import (
     Affine,
     Bijection,
+    ByDimension,
+    ByDimensionTransform,
     CoordinateSystemIdentifier,
     Identity,
     MapAxis,
     NoAffineError,
+    ProjectAxis,
     Rotation,
     Scale,
     Sequence,
@@ -99,6 +102,23 @@ def test_inverse(transform: Transform, inverse_expected: Transform) -> None:
             ),
             (0, 1.5, 6),
         ),
+        (
+            ByDimension(
+                transformations=(
+                    ByDimensionTransform(
+                        transformation=Scale(scale=(4,)),
+                        input_axes=(2,),
+                        output_axes=(1,),
+                    ),
+                    ByDimensionTransform(
+                        transformation=Translation(translation=(0.1, 0.3)),
+                        input_axes=(1, 0),
+                        output_axes=(0, 2),
+                    ),
+                )
+            ),
+            (1.1, 8.0, 0.3),
+        ),
     ),
 )
 def test_transform_point(
@@ -117,6 +137,23 @@ def test_transform_point(
         (Identity(), (0, 1, 2)),
         (Translation(translation=(3.2, 10.2, 7.5)), (-3.2, -9.2, -5.5)),
         (Scale(scale=(1, 0.5, 2)), (0, 2, 1)),
+        (
+            ByDimension(
+                transformations=(
+                    ByDimensionTransform(
+                        transformation=Scale(scale=(4,)),
+                        input_axes=(2,),
+                        output_axes=(1,),
+                    ),
+                    ByDimensionTransform(
+                        transformation=Translation(translation=(0.1, 0.3)),
+                        input_axes=(1, 0),
+                        output_axes=(0, 2),
+                    ),
+                )
+            ),
+            (1.7, -0.1, 1 / 4),
+        ),
     ),
 )
 def test_inverse_transform_point(
@@ -246,3 +283,28 @@ def test_none_rotation() -> None:
         ValidationError, match="Provided matrix is not a pure rotation matrix"
     ):
         Rotation(rotation=((0, 2), (-1, 0)))
+
+
+def test_project_axis_both_none() -> None:
+    """Test that ProjectAxis raises an error when both fields are None."""
+    with pytest.raises(
+        ValidationError,
+        match=re.escape(
+            "At least one of 'createdOutputs' or 'droppedInputs' must be set."
+        ),
+    ):
+        ProjectAxis()
+
+
+def test_project_axis_created_outputs_only() -> None:
+    """Test that ProjectAxis accepts only createdOutputs."""
+    pa = ProjectAxis(createdOutputs=(0, 1))
+    assert pa.createdOutputs == (0, 1)
+    assert pa.droppedInputs is None
+
+
+def test_project_axis_dropped_inputs_only() -> None:
+    """Test that ProjectAxis accepts only droppedInputs."""
+    pa = ProjectAxis(droppedInputs=(2,))
+    assert pa.droppedInputs == (2,)
+    assert pa.createdOutputs is None
