@@ -287,6 +287,39 @@ class MapAxis(Transform):
         )
 
 
+class ProjectAxis(Transform):
+    """
+    Transform which can drop axes or create trivial axes.
+
+    Examples
+    --------
+    >>> from ome_zarr_models.v06.coordinate_transforms import ProjectAxis
+    >>> t = ProjectAxis(droppedInputs=(1, 2), createdOutputs=(0, 3))
+    >>> t.transform_point((11, 12, 22, 33))
+    (0, 11, 33, 0)
+    """
+
+    type: Literal["projectAxis"] = "projectAxis"
+    droppedInputs: tuple[int, ...] | None = None
+    """Indices of the input coordinate which should be dropped."""
+    createdOutputs: tuple[int, ...] | None = None
+    """Indices of the output coordinate representing new axes (value 0)."""
+
+    @property
+    def has_inverse(self) -> bool:
+        return False
+
+    def transform_point(self, point: typing.Sequence[float]) -> tuple[float, ...]:
+        p = list(point)
+        if self.droppedInputs is not None:
+            for di in sorted(self.droppedInputs, reverse=True):
+                p.pop(di)
+        if self.createdOutputs is not None:
+            for co in sorted(self.createdOutputs):
+                p.insert(co, 0)
+        return tuple(p)
+
+
 class Translation(Transform):
     """Translation transformation."""
 
@@ -763,6 +796,7 @@ class ByDimension(Transform):
 AnyTransform = Annotated[
     Identity
     | MapAxis
+    | ProjectAxis
     | Translation
     | Scale
     | Affine
